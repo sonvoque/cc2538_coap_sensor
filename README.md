@@ -13,22 +13,26 @@ WSN temperature sensor based on cc2538 + Contiki + CoAP
 
 This should generate coap_sensor bin, elf and hex target files:
 
-get bootloader scripts:
+Update contiki submodules. Wee need cc2538-bsl script to upload image via serial port
+to bootloader into CC2538:
+
     $ cd contiki
     $ git submodule update --init
 
 Back to sensor project dir:
 
     $ cd ../
-Put device in bootloader mode via external pin:
+    
+Put device in bootloader mode via reset and predefined external pin:
+
     $ make coap-post.upload
 
 If flashing was successfull, sensor will print its IPv6 address on console
 and will start posting messages with some metrics to predefined IP address bbbb::1:
 
-Messages are in JSON format:
+Example message in JSON format:
 
-    $ { "eui": "00124b0003d0a6ac", "vdd": "2671 mV", "temp": "35238 mC", "count": "5242", "tmp102": "25312 mC", "rssi": "-105 dBm" }
+    $ { "eui": "00124b0003d0a6ac", "vdd": "2671 mV", "temp": "35238 mC", "count": "5242", "tmp102": "25312 mC" }
 
 You can change some of parameters with CoAP capable client:
 

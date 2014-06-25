@@ -15,7 +15,6 @@ CFLAGS += -DUIP_CONF_IPV6=1
 # variable for Makefile.include
 CFLAGS += -DUIP_CONF_IPV6_RPL=1
 
-
 SMALL=1
 
 # REST Engine shall use Erbium CoAP implementation
@@ -34,5 +33,8 @@ endif
 ifeq ($(WITH_BUTTON_SENSOR),1)
 CFLAGS += -DWITH_BUTTON_SENSOR=1
 endif
+
+PROJECTDIRS += rplinfo
+PROJECT_SOURCEFILES += rplinfo.c
 
 include $(CONTIKI)/Makefile.include

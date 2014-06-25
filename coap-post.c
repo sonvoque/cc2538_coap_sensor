@@ -35,6 +35,7 @@
 /* contiki */
 #include "contiki.h"
 #include "contiki-net.h"
+#include "net/rpl/rpl.h"
 #include "dev/radio.h"
 
 #if PLATFORM_HAS_BUTTON
@@ -73,6 +74,8 @@
 #define DEFAULT_POST_INTERVAL 10
 
 #define REMOTE_PORT     UIP_HTONS(COAP_DEFAULT_PORT)
+
+extern void rplinfo_activate_resources(void);
 
 PROCESS(cc2538_sensor, "CC2538 based sensor");
 AUTOSTART_PROCESSES(&cc2538_sensor);
@@ -412,8 +415,7 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	/* Initialize the REST engine. */
 	rest_init_engine();
 	rest_activate_resource(&config, "config");
-//	rplinfo_activate_resources();
-//	rest_activate_resource(&resource_config);
+	rplinfo_activate_resources();
 
 #if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
 	SENSORS_ACTIVATE(se95_sensor);

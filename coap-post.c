@@ -79,6 +79,19 @@
 
 #define REMOTE_PORT     UIP_HTONS(COAP_DEFAULT_PORT)
 
+struct ow_sensor_s {
+	struct ow_sensor_s *next;
+	int idx;
+	int temperature;
+	unsigned char rom_addr[ONEWIRE_ROM_LENGTH];
+	char label[10];
+};
+typedef struct ow_sensor_s ow_sensor_t;
+
+#define MAX_SENSORS 10
+MEMB(sensor_memb, struct ow_sensor_s, MAX_SENSORS);
+LIST(sensor_list);
+
 extern void rplinfo_activate_resources(void);
 
 PROCESS(cc2538_sensor, "CC2538 based sensor");
@@ -538,6 +551,8 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 int scan_channel(int ch) {
 	int i, count = 0;
 	int status;
+	int match;
+	ow_sensor_t *s;
 
 	DS2482_channel_select(ch);
 	status = OWFirst();
@@ -548,6 +563,33 @@ int scan_channel(int ch) {
 		for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 			PRINTF("%02X", ROM_NO[i]);
 		PRINTF("\n");
+
+		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+				PRINTF("%02X", s->rom_addr[i]);
+			PRINTF(" ");
+			// If already exist in list, break
+			match = 1;
+			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--){
+				if(s->rom_addr[i] != ROM_NO[i])
+					match = 0;
+			}
+			if(match)
+				break;
+		}
+		PRINTF("\n");
+		// New sensor found, add it to list
+		if(s == NULL) {
+			s = memb_alloc(&sensor_memb);
+			if(s != NULL) {
+				memset(s, 0, sizeof(struct ow_sensor_s));
+				for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+					s->rom_addr[i] = ROM_NO[i];
+				s->idx = count;
+				PRINTF("%s: Add new sensor idx = %d\n", __FUNCTION__, s->idx);
+				list_add(sensor_list, s);
+			}
+		}
 		status = OWNext();
 	}
 	return count;
@@ -574,8 +616,11 @@ void find_family(int ch, uint8_t family_code) {
 PROCESS_THREAD(ow_i2c, ev, data)
 {
 	int i;
+
 	PROCESS_BEGIN();
 	etimer_set(&et_1wire, 1 * CLOCK_SECOND);
+
+	list_init(sensor_list);
 
 	while(1) {
 		PROCESS_WAIT_EVENT();

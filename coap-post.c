@@ -52,6 +52,7 @@
 #if WITH_SE95_SENSOR
 #include "dev/se95-sensor.h"
 #endif
+#include "dev/ds2482.h"
 
 #include "rest-engine.h"
 #include "er-coap-engine.h"
@@ -81,7 +82,9 @@
 extern void rplinfo_activate_resources(void);
 
 PROCESS(cc2538_sensor, "CC2538 based sensor");
-AUTOSTART_PROCESSES(&cc2538_sensor);
+PROCESS(ow_i2c, "1wire i2c test");
+//AUTOSTART_PROCESSES(&cc2538_sensor);
+AUTOSTART_PROCESSES(&ow_i2c);
 
 /* flag to test if con has failed or not */
 static uint8_t con_ok;
@@ -92,6 +95,7 @@ static int uptime_count;
 char buf[256];
 
 static struct etimer et_read_sensors;
+static struct etimer et_1wire;
 static radio_value_t radio_value;
 static process_event_t ev_new_interval;
 
@@ -525,6 +529,51 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 			etimer_set(&et_read_sensors, sensor_cfg.post_interval * CLOCK_SECOND);
 			process_start(&read_sensors, NULL);
 			uptime_count++;
+		}
+
+	}
+	PROCESS_END();
+}
+
+int scan_channel(int ch) {
+	int i, count = 0;
+	int status;
+
+	DS2482_channel_select(ch);
+	status = OWFirst();
+
+	while(status) {
+		count++;
+		PRINTF("%s: ch[%d:%d] Device found ", __FUNCTION__, ch, count);
+		for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+			PRINTF("%02X", ROM_NO[i]);
+		PRINTF("\n");
+		status = OWNext();
+	}
+	return count;
+}
+
+PROCESS_THREAD(ow_i2c, ev, data)
+{
+	int i;
+	PROCESS_BEGIN();
+	etimer_set(&et_1wire, 1 * CLOCK_SECOND);
+
+	while(1) {
+		PROCESS_WAIT_EVENT();
+
+		if(etimer_expired(&et_1wire)) {
+			etimer_set(&et_1wire, 1 * CLOCK_SECOND);
+			PRINTF("\nNew interval for DS2482_detect is set\n");
+			if(DS2482_detect(DS2482_ADDRESS)) {
+				PRINTF("%s: DS2482 detected ----- \n", __FUNCTION__);
+
+				PRINTF("%s: Find all devices\n", __FUNCTION__);
+				for(i=0;i<8;i++)
+					scan_channel(i);
+
+			} else
+				PRINTF("%s: No DS2482 detected\n", __FUNCTION__);
 		}
 
 	}

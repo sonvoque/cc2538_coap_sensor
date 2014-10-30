@@ -553,6 +553,24 @@ int scan_channel(int ch) {
 	return count;
 }
 
+void find_family(int ch, uint8_t family_code) {
+	int i, count = 0;
+
+	DS2482_channel_select(ch);
+	OWTargetSetup(family_code);
+
+	while (OWNext()) {
+		// check for incorrect type
+		if (ROM_NO[0] != family_code)
+			break;
+		count++;
+		PRINTF("%s: ch[%d:%d] Device found ", __FUNCTION__, ch, count);
+		for (i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+			PRINTF("%02X", ROM_NO[i]);
+		PRINTF("\n");
+	}
+}
+
 PROCESS_THREAD(ow_i2c, ev, data)
 {
 	int i;
@@ -571,6 +589,10 @@ PROCESS_THREAD(ow_i2c, ev, data)
 				PRINTF("%s: Find all devices\n", __FUNCTION__);
 				for(i=0;i<8;i++)
 					scan_channel(i);
+
+				PRINTF("%s: Find all devices from 0x10 family\n", __FUNCTION__);
+				for(i=0;i<8;i++)
+					find_family(i, 0x10);
 
 			} else
 				PRINTF("%s: No DS2482 detected\n", __FUNCTION__);

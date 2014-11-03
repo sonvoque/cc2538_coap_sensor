@@ -76,25 +76,18 @@
 
 #define REMOTE_PORT     UIP_HTONS(COAP_DEFAULT_PORT)
 
-struct ow_sensor_s {
-	struct ow_sensor_s *next;
-	int idx;
-	int temperature;
-	unsigned char rom_addr[ONEWIRE_ROM_LENGTH];
-	char label[10];
-};
-typedef struct ow_sensor_s ow_sensor_t;
-
 #define MAX_SENSORS 10
 MEMB(sensor_memb, struct ow_sensor_s, MAX_SENSORS);
 LIST(sensor_list);
+ow_sensor_t *s;
 
 extern void rplinfo_activate_resources(void);
 
 PROCESS(cc2538_sensor, "CC2538 based sensor");
 PROCESS(ow_i2c, "1wire i2c test");
+PROCESS(read_temp, "Read temp from DS18x20");
 //AUTOSTART_PROCESSES(&cc2538_sensor);
-AUTOSTART_PROCESSES(&ow_i2c);
+AUTOSTART_PROCESSES(&ow_i2c, &read_temp);
 
 /* flag to test if con has failed or not */
 static uint8_t con_ok;
@@ -105,7 +98,7 @@ static int uptime_count;
 char buf[256];
 
 static struct etimer et_read_sensors;
-static struct etimer et_1wire;
+static struct etimer et_1wire, et_read_temp;
 static radio_value_t radio_value;
 static process_event_t ev_new_interval;
 
@@ -499,7 +492,6 @@ int scan_channel(int ch) {
 	int i, count = 0;
 	int status;
 	int match;
-	ow_sensor_t *s;
 
 	DS2482_channel_select(ch);
 	status = OWFirst();
@@ -509,12 +501,17 @@ int scan_channel(int ch) {
 		PRINTF("%s: ch[%d:%d] Device found ", __FUNCTION__, ch, count);
 		for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 			PRINTF("%02X", ROM_NO[i]);
-		PRINTF("\n");
+		//PRINTF("\n");
+		PRINTF(" ");
 
 		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+			// mark this sensor as available
+			s->available = 1;
+/*
 			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 				PRINTF("%02X", s->rom_addr[i]);
 			PRINTF(" ");
+*/
 			// If already exist in list, break
 			match = 1;
 			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--){
@@ -524,21 +521,27 @@ int scan_channel(int ch) {
 			if(match)
 				break;
 		}
-		PRINTF("\n");
-		// New sensor found, add it to list
+//		PRINTF("\n");
 		if(s == NULL) {
+			// New sensor found, add it to list
 			s = memb_alloc(&sensor_memb);
 			if(s != NULL) {
 				memset(s, 0, sizeof(struct ow_sensor_s));
 				for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 					s->rom_addr[i] = ROM_NO[i];
+				s->channel = ch;
 				s->idx = count;
-				PRINTF("%s: Add new sensor idx = %d\n", __FUNCTION__, s->idx);
+				s->available = 1;
+				PRINTF("Add it to list %d:%d:%d\n", s->channel, s->idx, s->available);
 				list_add(sensor_list, s);
-			}
-		}
+			} else
+				PRINTF("Can't alloc mem for new sensor\n");
+		} else
+			PRINTF("\n");
+
 		status = OWNext();
 	}
+
 	return count;
 }
 
@@ -558,6 +561,17 @@ void find_family(int ch, uint8_t family_code) {
 			PRINTF("%02X", ROM_NO[i]);
 		PRINTF("\n");
 	}
+/* TODO
+	// start sample temp on all devices ? if only temp sensors are attached
+	ds18x20_sample_temperature(NULL, true);
+	msleep(750);
+	// Read their scratchpads and convert raw data to temperature according to chip model
+	for(s;s;s) {
+		ow_read_temperature(s, false);
+		// TODO move convert temp in ow_read_temperature and set s->temperature
+		temp = ow_convert_temperature_18S20();
+	}
+*/
 }
 
 PROCESS_THREAD(ow_i2c, ev, data)
@@ -568,6 +582,7 @@ PROCESS_THREAD(ow_i2c, ev, data)
 	etimer_set(&et_1wire, 1 * CLOCK_SECOND);
 
 	list_init(sensor_list);
+	memb_init(&sensor_memb);
 
 	while(1) {
 		PROCESS_WAIT_EVENT();
@@ -578,18 +593,69 @@ PROCESS_THREAD(ow_i2c, ev, data)
 			if(DS2482_detect(DS2482_ADDRESS)) {
 				PRINTF("%s: DS2482 detected ----- \n", __FUNCTION__);
 
+				// mark all sensors as unavailable
+				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s))
+					s->available = 0;
+
 				PRINTF("%s: Find all devices\n", __FUNCTION__);
 				for(i=0;i<8;i++)
 					scan_channel(i);
 
+
+				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+					if(!s->available) {
+						PRINTF("%s: Remove undetected sensor from list ", __FUNCTION__);
+						for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+							PRINTF("%02X", s->rom_addr[i]);
+						PRINTF("\n");
+						list_remove(sensor_list, s);
+						memb_free(&sensor_memb, s);
+					}
+				}
+/*
 				PRINTF("%s: Find all devices from 0x10 family\n", __FUNCTION__);
 				for(i=0;i<8;i++)
 					find_family(i, 0x10);
-
+*/
 			} else
 				PRINTF("%s: No DS2482 detected\n", __FUNCTION__);
 		}
+	} // while(1)
 
+	// remove all sensors and release memory
+	while(list_head(sensor_list)) {
+		// remove last element from list
+		s = list_chop(sensor_list);
+		memb_free(&sensor_memb, s);
+	}
+
+	PROCESS_END();
+}
+
+
+PROCESS_THREAD(read_temp, ev, data)
+{
+	int i;
+
+	PROCESS_BEGIN();
+
+	etimer_set(&et_read_temp, 5 * CLOCK_SECOND);
+
+	while(1) {
+		PROCESS_WAIT_EVENT();
+
+		if(etimer_expired(&et_read_temp)) {
+			etimer_set(&et_read_temp, 5 * CLOCK_SECOND);
+			PRINTF("\nNew interval for read temp is set\n");
+		}
+
+		PRINTF("----> read_temp: ");
+		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+				PRINTF("%02X", s->rom_addr[i]);
+			PRINTF(" ");
+		}
+		PRINTF("\n");
 	}
 	PROCESS_END();
 }

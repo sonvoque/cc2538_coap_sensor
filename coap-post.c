@@ -545,8 +545,9 @@ int scan_channel(int ch) {
 	return count;
 }
 
-void find_family(int ch, uint8_t family_code) {
+int find_family(int ch, uint8_t family_code) {
 	int i, count = 0;
+	int match;
 
 	DS2482_channel_select(ch);
 	OWTargetSetup(family_code);
@@ -559,20 +560,43 @@ void find_family(int ch, uint8_t family_code) {
 		PRINTF("%s: ch[%d:%d] Device found ", __FUNCTION__, ch, count);
 		for (i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 			PRINTF("%02X", ROM_NO[i]);
-		PRINTF("\n");
+		PRINTF(" ");
+
+		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+			// mark this sensor as available
+			s->available = 1;
+
+			// If already exist in list, break
+			match = 1;
+			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--){
+				if(s->rom_addr[i] != ROM_NO[i])
+					match = 0;
+			}
+			if(match)
+				break;
+		}
+
+		if(s == NULL) {
+			// New sensor found, add it to list
+			s = memb_alloc(&sensor_memb);
+			if(s != NULL) {
+				memset(s, 0, sizeof(struct ow_sensor_s));
+				for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+					s->rom_addr[i] = ROM_NO[i];
+				s->channel = ch;
+				s->idx = count;
+				s->available = 1;
+				PRINTF("Add it to list %d:%d:%d\n", s->channel, s->idx, s->available);
+				list_add(sensor_list, s);
+			} else
+				PRINTF("Can't alloc mem for new sensor\n");
+		} else
+			PRINTF("\n");
 	}
-/* TODO
-	// start sample temp on all devices ? if only temp sensors are attached
-	ds18x20_sample_temperature(NULL, true);
-	msleep(750);
-	// Read their scratchpads and convert raw data to temperature according to chip model
-	for(s;s;s) {
-		ow_read_temperature(s, false);
-		// TODO move convert temp in ow_read_temperature and set s->temperature
-		temp = ow_convert_temperature_18S20();
-	}
-*/
+	return count;
 }
+
+#define FIND_ALL	1
 
 PROCESS_THREAD(ow_i2c, ev, data)
 {
@@ -596,11 +620,15 @@ PROCESS_THREAD(ow_i2c, ev, data)
 				// mark all sensors as unavailable
 				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s))
 					s->available = 0;
-
+#if FIND_ALL
 				PRINTF("%s: Find all devices\n", __FUNCTION__);
 				for(i=0;i<8;i++)
 					scan_channel(i);
-
+#else
+				PRINTF("%s: Find all devices from 0x10 family\n", __FUNCTION__);
+				for(i=0;i<8;i++)
+					find_family(i, 0x10);
+#endif
 
 				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
 					if(!s->available) {
@@ -612,11 +640,7 @@ PROCESS_THREAD(ow_i2c, ev, data)
 						memb_free(&sensor_memb, s);
 					}
 				}
-/*
-				PRINTF("%s: Find all devices from 0x10 family\n", __FUNCTION__);
-				for(i=0;i<8;i++)
-					find_family(i, 0x10);
-*/
+
 			} else
 				PRINTF("%s: No DS2482 detected\n", __FUNCTION__);
 		}
@@ -656,6 +680,18 @@ PROCESS_THREAD(read_temp, ev, data)
 			PRINTF(" ");
 		}
 		PRINTF("\n");
+
+/* TODO
+	// start sample temp on all devices ? if only temp sensors are attached
+	ds18x20_sample_temperature(NULL, true);
+	msleep(750);
+	// Read their scratchpads and convert raw data to temperature according to chip model
+	for(s;s;s) {
+		ow_read_temperature(s, false);
+		// TODO move convert temp in ow_read_temperature and set s->temperature
+		temp = ow_convert_temperature_18S20();
+	}
+*/
 	}
 	PROCESS_END();
 }

@@ -83,6 +83,7 @@
 MEMB(sensor_memb, struct ow_sensor_s, MAX_SENSORS);
 LIST(sensor_list);
 ow_sensor_t *s;
+int search_lock;
 
 extern void rplinfo_activate_resources(void);
 
@@ -101,7 +102,9 @@ static int uptime_count;
 char buf[256];
 
 static struct etimer et_read_sensors;
-static struct etimer et_1wire, et_read_temp;
+static struct etimer et_1wire,
+		et_read_temp,
+		et_sample_temp;
 static radio_value_t radio_value;
 static process_event_t ev_new_interval;
 
@@ -649,7 +652,7 @@ int find_family(int ch, uint8_t family_code) {
 	return count;
 }
 
-#define FIND_ALL	1
+#define FIND_ALL	0
 
 PROCESS_THREAD(ow_i2c, ev, data)
 {
@@ -665,7 +668,7 @@ PROCESS_THREAD(ow_i2c, ev, data)
 		PROCESS_WAIT_EVENT();
 
 		if(etimer_expired(&et_1wire)) {
-			etimer_set(&et_1wire, 1 * CLOCK_SECOND);
+			etimer_set(&et_1wire, 10 * CLOCK_SECOND);
 			PRINTF("\nNew interval for DS2482_detect is set\n");
 			if(DS2482_detect(DS2482_ADDRESS)) {
 				PRINTF("%s: DS2482 detected ----- \n", __FUNCTION__);
@@ -673,6 +676,9 @@ PROCESS_THREAD(ow_i2c, ev, data)
 				// mark all sensors as unavailable
 				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s))
 					s->available = 0;
+
+				// prevent other activity to OW
+				search_lock = 1;
 #if FIND_ALL
 				PRINTF("%s: Find all devices\n", __FUNCTION__);
 				for(i=0;i<8;i++)
@@ -682,6 +688,7 @@ PROCESS_THREAD(ow_i2c, ev, data)
 				for(i=0;i<8;i++)
 					find_family(i, 0x10);
 #endif
+				search_lock = 0;
 
 				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
 					if(!s->available) {
@@ -712,39 +719,66 @@ PROCESS_THREAD(ow_i2c, ev, data)
 
 PROCESS_THREAD(read_temp, ev, data)
 {
-	int i;
+	int i, ch, ch_mask;
+	int status;
 
 	PROCESS_BEGIN();
 
-	etimer_set(&et_read_temp, 5 * CLOCK_SECOND);
+	etimer_set(&et_read_temp, 2 * CLOCK_SECOND);
 
 	while(1) {
 		PROCESS_WAIT_EVENT();
 
 		if(etimer_expired(&et_read_temp)) {
-			etimer_set(&et_read_temp, 5 * CLOCK_SECOND);
+
+			// ??? do we realy need this on single CPU ???
+			if(search_lock)
+				continue;
+
+			etimer_set(&et_read_temp, 2 * CLOCK_SECOND);
 			PRINTF("\nNew interval for read temp is set\n");
+
+			PRINTF("----> %s: sensor_list ", __FUNCTION__);
+			for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+				for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+					PRINTF("%02X", s->rom_addr[i]);
+				PRINTF(" ");
+			}
+			PRINTF("\n");
+
+			ch_mask = 0;
+			for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+				ch = s->channel;
+				// if channel not sampled
+				if(!(ch_mask & ( 1 << ch ))) {
+					PRINTF("----> %s: Start sample temperature on ch = %d\n", __FUNCTION__, ch);
+					// Inform all sensors on channel <> to start sample temperature
+					DS2482_channel_select(ch);
+					status = ds18x20_sample_temperature(NULL, true);
+					PRINTF("----> %s: ds18x20_sample_temperature status = %d\n", __FUNCTION__, status);
+				}
+				// mark channel as already sampled
+				ch_mask |= ( 1 << ch );
+			}
+			// Note: et_read_temp[time] > et_sample_temp[time], i.e. >= 1s
+			etimer_set(&et_sample_temp, 1 * CLOCK_SECOND);
 		}
 
-		PRINTF("----> read_temp: ");
-		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
-			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
-				PRINTF("%02X", s->rom_addr[i]);
-			PRINTF(" ");
+		if(etimer_expired(&et_sample_temp)) {
+			PRINTF("----> %s: Read temperature\n", __FUNCTION__);
+			for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+				for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+					PRINTF("%02X", s->rom_addr[i]);
+				PRINTF(" ");
+				DS2482_channel_select(s->channel);
+				status = ow_read_temperature(s);
+				if(status)
+					PRINTF("Temperature = %d\n", s->temperature);
+				else
+					PRINTF("Unable to read temperature, status = %d\n", status);
+			}
+			//TODO start post task
 		}
-		PRINTF("\n");
-
-/* TODO
-	// start sample temp on all devices ? if only temp sensors are attached
-	ds18x20_sample_temperature(NULL, true);
-	msleep(750);
-	// Read their scratchpads and convert raw data to temperature according to chip model
-	for(s;s;s) {
-		ow_read_temperature(s, false);
-		// TODO move convert temp in ow_read_temperature and set s->temperature
-		temp = ow_convert_temperature_18S20();
-	}
-*/
 	}
 	PROCESS_END();
 }

@@ -49,7 +49,7 @@
 #if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
 #include "dev/se95-sensor.h"
 #endif
-#include "dev/ds2482.h"
+#include "dev/ds1820.h"
 
 #include "rest-engine.h"
 #include "er-coap-engine.h"
@@ -86,7 +86,7 @@ extern void rplinfo_activate_resources(void);
 
 PROCESS(cc2538_sensor, "CC2538 based sensor");
 PROCESS(ow_i2c, "1wire i2c test");
-PROCESS(read_temp, "Read temp from DS18x20");
+PROCESS(read_temp, "Read temp from DS1820");
 //AUTOSTART_PROCESSES(&cc2538_sensor);
 AUTOSTART_PROCESSES(&ow_i2c, &read_temp);
 
@@ -699,10 +699,10 @@ PROCESS_THREAD(read_temp, ev, data)
 				// if channel not sampled
 				if(!(ch_mask & ( 1 << ch ))) {
 					PRINTF("----> %s: Start sample temperature on ch = %d\n", __FUNCTION__, ch);
-					// Inform all sensors on channel <> to start sample temperature
+					// Inform all sensors on channel <ch> to start sample temperature
 					DS2482_channel_select(ch);
-					status = ds18x20_sample_temperature(NULL, true);
-					PRINTF("----> %s: ds18x20_sample_temperature status = %d\n", __FUNCTION__, status);
+					status = ds1820_sample_temperature(NULL, true);
+					PRINTF("----> %s: ds1820_sample_temperature status = %d\n", __FUNCTION__, status);
 				}
 				// mark channel as already sampled
 				ch_mask |= ( 1 << ch );

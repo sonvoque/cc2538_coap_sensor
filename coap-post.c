@@ -628,18 +628,23 @@ PROCESS_THREAD(ow_i2c, ev, data)
 				search_lock = 1;
 #if FIND_ALL
 				PRINTF("%s: Find all devices\n", __FUNCTION__);
-				for(i=0;i<8;i++)
+				for(i=0;i<DS2482_NUM_CHANNELS;i++)
 					scan_channel(i);
 #else
-				PRINTF("%s: Find all devices from 0x10 family\n", __FUNCTION__);
-				for(i=0;i<8;i++)
-					find_family(i, 0x10);
+				PRINTF("%s: Find all devices from %02X family\n", __FUNCTION__,
+										DS18S20_FAMMILY_CODE);
+				for(i=0;i<DS2482_NUM_CHANNELS;i++)
+					find_family(i, DS18S20_FAMMILY_CODE);
+				PRINTF("%s: Find all devices from %02X family\n", __FUNCTION__,
+										DS18B20_FAMMILY_CODE);
+				for(i=0;i<DS2482_NUM_CHANNELS;i++)
+					find_family(i, DS18B20_FAMMILY_CODE);
 #endif
 				search_lock = 0;
 
 				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
 					if(!s->available) {
-						PRINTF("%s: Remove undetected sensor from list ", __FUNCTION__);
+						PRINTF("%s: Remove undetected sensor from list ",__FUNCTION__);
 						for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 							PRINTF("%02X", s->rom_addr[i]);
 						PRINTF("\n");
@@ -692,7 +697,6 @@ PROCESS_THREAD(read_temp, ev, data)
 				PRINTF(" ");
 			}
 			PRINTF("\n");
-
 			ch_mask = 0;
 			for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
 				ch = s->channel;
@@ -707,6 +711,7 @@ PROCESS_THREAD(read_temp, ev, data)
 				// mark channel as already sampled
 				ch_mask |= ( 1 << ch );
 			}
+
 			// Note: et_read_temp[time] > et_sample_temp[time], i.e. >= 1s
 			etimer_set(&et_sample_temp, 1 * CLOCK_SECOND);
 		}
@@ -716,7 +721,15 @@ PROCESS_THREAD(read_temp, ev, data)
 			for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
 				for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 					PRINTF("%02X", s->rom_addr[i]);
-				PRINTF(" ");
+
+				PRINTF(" [%d:%d] ", s->channel, s->idx);
+
+				if(s->rom_addr[0] != DS18S20_FAMMILY_CODE ||
+				   s->rom_addr[0] != DS18S20_FAMMILY_CODE) {
+					PRINTF("Skip, not temperature sensor\n");
+					continue;
+				}
+
 				DS2482_channel_select(s->channel);
 				status = ow_read_temperature(s);
 				if(status)

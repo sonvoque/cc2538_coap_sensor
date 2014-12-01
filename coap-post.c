@@ -81,13 +81,15 @@ MEMB(sensor_memb, struct ow_sensor_s, MAX_SENSORS);
 LIST(sensor_list);
 ow_sensor_t *s;
 
+
 extern void rplinfo_activate_resources(void);
 
 PROCESS(cc2538_sensor, "CC2538 based sensor");
+#if WITH_OW_TEMP_SENSORS
 PROCESS(ow_i2c, "1wire i2c test");
 PROCESS(ow_read_temp, "1wire read temp");
+#endif
 AUTOSTART_PROCESSES(&cc2538_sensor);
-//AUTOSTART_PROCESSES(&ow_i2c);
 
 /* flag to test if con has failed or not */
 static uint8_t con_ok;
@@ -99,10 +101,12 @@ char buf[256];
 
 static struct etimer et_read_sensors;
 //static struct etimer et_1wire;
+#if WITH_OW_TEMP_SENSORS
 static struct etimer et_sample_temp;
+static int ow_sensors_found = 0;
+#endif
 static radio_value_t radio_value;
 static process_event_t ev_new_interval;
-static int ow_sensors_found = 0;
 
 /* flash config */
 /* MAX len for paths and hostnames */
@@ -357,8 +361,9 @@ PROCESS(read_sensors, "Read sensors");
 PROCESS_THREAD(read_sensors, ev, data)
 {
 	uint8_t n = 0;
-#if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
+#if WITH_SE95_SENSOR || WITH_TMP102_SENSOR || WITH_OW_TEMP_SENSORS
 	uint8_t m = 0;
+//	int i;
 	char temp_buf[30];
 #endif
 	int16_t value;
@@ -379,9 +384,10 @@ PROCESS_THREAD(read_sensors, ev, data)
 
 	value = adc_sensor.value(ADC_SENSOR_VDD_3);
 	n += sprintf(&(buf[n]),",\"vdd\":\"%d mV\"", value * (3 * 1190) / (2047 << 4));
+
 	value = adc_sensor.value(ADC_SENSOR_TEMP);
 	n += sprintf(&(buf[n]),",\"temp\":\"%d mC\"", 25000 + ((value >> 4) - 1422) * 10000 / 42);
-	n += sprintf(&(buf[n]),",\"count\":\"%d\"", uptime_count);
+
 #if WITH_SE95_SENSOR
 	value = se95_sensor.value(0);
 	if(value & (1<<12))
@@ -392,6 +398,7 @@ PROCESS_THREAD(read_sensors, ev, data)
 	strncat(&(buf[n]), temp_buf, m);
 	n += m;
 #endif
+
 #if WITH_TMP102_SENSOR
 	value = se95_sensor.value(0);
 	if(value & (1<<12))
@@ -403,21 +410,44 @@ PROCESS_THREAD(read_sensors, ev, data)
 	n += m;
 #endif
 
+#if WITH_OW_TEMP_SENSORS
+	for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+/*
+		for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+			PRINTF("%02X", s->rom_addr[i]);
+		PRINTF("\n");
+*/
+
+		if(s->rom_addr[0] != DS18S20_FAMMILY_CODE ||
+		   s->rom_addr[0] != DS18S20_FAMMILY_CODE) {
+			PRINTF("Skip, not temperature sensor\n");
+			continue;
+		}
+
+		m = sprintf(temp_buf,",\"%02x%02x%02x%02x%02x%02x%02x%02x\":\"%d mC\"",
+				s->rom_addr[0],
+				s->rom_addr[1],
+				s->rom_addr[2],
+				s->rom_addr[3],
+				s->rom_addr[4],
+				s->rom_addr[5],
+				s->rom_addr[6],
+				s->rom_addr[7],
+				s->temperature);
+		strncat(&(buf[n]), temp_buf, m);
+		n += m;
+	}
+#endif
+
+
 	if(NETSTACK_RADIO.get_value(RADIO_PARAM_RSSI, &radio_value) == RADIO_RESULT_OK)
 		n += sprintf(&(buf[n]),",\"rssi\":\"%d dBm\"", radio_value);
+
+	n += sprintf(&(buf[n]),",\"count\":\"%d\"", uptime_count);
 
 	n += sprintf(&(buf[n]),"}");
 	buf[n] = 0;
 	PRINTF("buf: %s\n", buf);
-
-	if(ow_sensors_found) {
-		PRINTF("%s: release memory for OW temp sensors\n", __FUNCTION__);
-		while(list_head(sensor_list)) {
-			// remove last element from list
-			s = list_chop(sensor_list);
-			memb_free(&sensor_memb, s);
-		}
-	}
 
 	if (dag != NULL) {
 		process_start(&do_post, NULL);
@@ -428,7 +458,6 @@ PROCESS_THREAD(read_sensors, ev, data)
 
 PROCESS_THREAD(cc2538_sensor, ev, data)
 {
-
 	PROCESS_BEGIN();
 
 	ev_new_interval = process_alloc_event();
@@ -461,6 +490,9 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	post_count = 0;
 	uptime_count = 0;
 
+	list_init(sensor_list);
+	memb_init(&sensor_memb);
+
 	while(1) {
 		PROCESS_WAIT_EVENT();
 
@@ -491,17 +523,29 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 			}
 
 			etimer_set(&et_read_sensors, sensor_cfg.post_interval * CLOCK_SECOND);
-			//process_start(&read_sensors, NULL);
+#if WITH_OW_TEMP_SENSORS
 			process_start(&ow_i2c, NULL);
+#else
+			process_start(&read_sensors, NULL);
+#endif
 			uptime_count++;
 		}
 
 	}
+
+	// If thread exits, remove all sensors and release memory
+	while(list_head(sensor_list)) {
+		// remove last element from list
+		s = list_chop(sensor_list);
+		memb_free(&sensor_memb, s);
+	}
+
 	PROCESS_END();
 }
 
 
 
+#if WITH_OW_TEMP_SENSORS
 int scan_channel(int ch) {
 	int i, count = 0;
 	int status;
@@ -614,157 +658,105 @@ int find_family(int ch, uint8_t family_code) {
 
 PROCESS_THREAD(ow_i2c, ev, data)
 {
-	int i, status, ch, ch_mask;
+	int i, ret, ch, ch_mask;
 
 	PROCESS_BEGIN();
-//	etimer_set(&et_1wire, 1 * CLOCK_SECOND);
 
-	list_init(sensor_list);
-	memb_init(&sensor_memb);
 
-//	while(1) {
-//		PROCESS_WAIT_EVENT();
+	ow_sensors_found = 0;
+	if(DS2482_detect(DS2482_ADDRESS)) {
+		PRINTF("%s: DS2482 detected ----- \n", __FUNCTION__);
 
-//		if(etimer_expired(&et_1wire)) {
-//			etimer_set(&et_1wire, 10 * CLOCK_SECOND);
-//			PRINTF("\nNew interval for DS2482_detect is set\n");
-
-			ow_sensors_found = 0;
-			if(DS2482_detect(DS2482_ADDRESS)) {
-				PRINTF("%s: DS2482 detected ----- \n", __FUNCTION__);
-
-				// mark all sensors as unavailable
-				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s))
-					s->available = 0;
+		// mark all sensors as unavailable
+		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s))
+			s->available = 0;
 
 #if FIND_ALL
-				PRINTF("%s: Find all devices\n", __FUNCTION__);
-				for(i=0;i<DS2482_NUM_CHANNELS;i++)
-					scan_channel(i);
+		PRINTF("%s: Find all devices\n", __FUNCTION__);
+		for(i=0;i<DS2482_NUM_CHANNELS;i++)
+			ow_sensors_found += scan_channel(i);
 #else
-				PRINTF("%s: Find all devices from %02X family\n", __FUNCTION__,
-										DS18S20_FAMMILY_CODE);
-				for(i=0;i<DS2482_NUM_CHANNELS;i++)
-					ow_sensors_found += find_family(i, DS18S20_FAMMILY_CODE);
-				PRINTF("%s: Find all devices from %02X family\n", __FUNCTION__,
-										DS18B20_FAMMILY_CODE);
-				for(i=0;i<DS2482_NUM_CHANNELS;i++)
-					ow_sensors_found += find_family(i, DS18B20_FAMMILY_CODE);
+		PRINTF("%s: Find all devices from %02X family\n", __FUNCTION__,
+								DS18S20_FAMMILY_CODE);
+		for(i=0;i<DS2482_NUM_CHANNELS;i++)
+			ow_sensors_found += find_family(i, DS18S20_FAMMILY_CODE);
+		PRINTF("%s: Find all devices from %02X family\n", __FUNCTION__,
+								DS18B20_FAMMILY_CODE);
+		for(i=0;i<DS2482_NUM_CHANNELS;i++)
+			ow_sensors_found += find_family(i, DS18B20_FAMMILY_CODE);
 #endif
 
-				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
-					if(!s->available) {
-						PRINTF("%s: Remove undetected sensor from list ",__FUNCTION__);
-						for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
-							PRINTF("%02X", s->rom_addr[i]);
-						PRINTF("\n");
-						list_remove(sensor_list, s);
-						memb_free(&sensor_memb, s);
-					}
-				}
-			} else {
-				PRINTF("%s: No DS2482 detected\n", __FUNCTION__);
-			}
-
-			PRINTF("%s: Found %d devices\n", __FUNCTION__, ow_sensors_found);
-
-			// If no sensors found skip temperature sample
-			if(ow_sensors_found) {
-				// Start sample temperature on all channels on which we have discovered sensors
-				ch_mask = 0;
-				for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
-					ch = s->channel;
-					// if channel not sampled
-					if(!(ch_mask & ( 1 << ch ))) {
-						PRINTF("----> %s: Start sample temperature on ch = %d\n", __FUNCTION__, ch);
-						// Inform all sensors on channel <ch> to start sample temperature
-						DS2482_channel_select(ch);
-						status = ds1820_sample_temperature(NULL, true);
-						PRINTF("----> %s: ds1820_sample_temperature status = %d\n", __FUNCTION__, status);
-					}
-					// mark channel as already sampled
-					ch_mask |= ( 1 << ch );
-				}
-				process_start(&ow_read_temp, NULL);
-			} else
-				process_start(&read_sensors, NULL);
-
-			// read temperature after 1sec.
-//			etimer_set(&et_sample_temp, 1 * CLOCK_SECOND);
-//		} // if(etimer_expired(&et_1wire))
-/*
-		if(etimer_expired(&et_sample_temp)) {
-			PRINTF("----> %s: Read temperature\n", __FUNCTION__);
-			for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+			if(!s->available) {
+				PRINTF("%s: Remove undetected sensor from list ",__FUNCTION__);
 				for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
 					PRINTF("%02X", s->rom_addr[i]);
-
-				PRINTF(" [%d:%d] ", s->channel, s->idx);
-
-				if(s->rom_addr[0] != DS18S20_FAMMILY_CODE ||
-				   s->rom_addr[0] != DS18S20_FAMMILY_CODE) {
-					PRINTF("Skip, not temperature sensor\n");
-					continue;
-				}
-
-				DS2482_channel_select(s->channel);
-				status = ow_read_temperature(s);
-				if(status)
-					PRINTF("Temperature = %d\n", s->temperature);
-				else
-					PRINTF("Unable to read temperature, status = %d\n", status);
+				PRINTF("\n");
+				list_remove(sensor_list, s);
+				memb_free(&sensor_memb, s);
 			}
-			//TODO Signal post task
-			process_start(&read_sensors, NULL);
 		}
-*/
+	} else
+		PRINTF("%s: No DS2482 detected\n", __FUNCTION__);
 
-//	} // while(1)
+	PRINTF("%s: Found %d devices\n", __FUNCTION__, ow_sensors_found);
 
-/*
-	// If thread exits, remove all sensors and release memory
-	while(list_head(sensor_list)) {
-		// remove last element from list
-		s = list_chop(sensor_list);
-		memb_free(&sensor_memb, s);
-	}
-*/
+	// If no sensors found skip temperature sample
+	if(ow_sensors_found) {
+		// Start sample temperature on all channels on which we have discovered sensors
+		ch_mask = 0;
+		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+			ch = s->channel;
+			// if channel not sampled
+			if(!(ch_mask & ( 1 << ch ))) {
+				// Inform all sensors on channel <ch> to start sample temperature
+				ret = DS2482_channel_select(ch);
+				if(!ret)
+					PRINTF("%s: ds1820_sample_temperature ret = %d\n",
+									__FUNCTION__, ret);
+			}
+			// mark channel as already sampled
+			ch_mask |= ( 1 << ch );
+		}
+		process_start(&ow_read_temp, NULL);
+	} else
+		process_start(&read_sensors, NULL);
 
 	PROCESS_END();
 }
 
 PROCESS_THREAD(ow_read_temp, ev, data)
 {
-	int i, status;
+	int i, ret;
 
 	PROCESS_BEGIN();
 
 	etimer_set(&et_sample_temp, 1 * CLOCK_SECOND);
 	PROCESS_WAIT_UNTIL(etimer_expired(&et_sample_temp));
 
-//	if(etimer_expired(&et_sample_temp)) {
-		PRINTF("----> %s: Read temperature\n", __FUNCTION__);
-		for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
-			for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
-				PRINTF("%02X", s->rom_addr[i]);
+	for(s = list_head(sensor_list); s != NULL; s = list_item_next(s)) {
+		for(i=ONEWIRE_ROM_LENGTH-1;i>=0;i--)
+			PRINTF("%02X", s->rom_addr[i]);
 
-			PRINTF(" [%d:%d] ", s->channel, s->idx);
+		PRINTF(" [%d:%d] ", s->channel, s->idx);
 
-			if(s->rom_addr[0] != DS18S20_FAMMILY_CODE ||
-			   s->rom_addr[0] != DS18S20_FAMMILY_CODE) {
-				PRINTF("Skip, not temperature sensor\n");
-				continue;
-			}
-
-			DS2482_channel_select(s->channel);
-			status = ow_read_temperature(s);
-			if(status)
-				PRINTF("Temperature = %d\n", s->temperature);
-			else
-				PRINTF("Unable to read temperature, status = %d\n", status);
+		if(s->rom_addr[0] != DS18S20_FAMMILY_CODE ||
+		   s->rom_addr[0] != DS18S20_FAMMILY_CODE) {
+			PRINTF("Skip, not temperature sensor\n");
+			continue;
 		}
-		//TODO Signal post task
-		process_start(&read_sensors, NULL);
-//	}
+
+		DS2482_channel_select(s->channel);
+		ret = ow_read_temperature(s);
+		if(ret)
+			PRINTF("Temperature = %d\n", s->temperature);
+		else
+			PRINTF("Unable to read temperature, ret = %d\n", ret);
+	}
+
+	//TODO Signal post task
+	process_start(&read_sensors, NULL);
+
 	PROCESS_END();
 }
+#endif	//WITH_OW_TEMP_SENSORS

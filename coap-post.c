@@ -710,7 +710,8 @@ PROCESS_THREAD(ow_i2c, ev, data)
 			// if channel not sampled
 			if(!(ch_mask & ( 1 << ch ))) {
 				// Inform all sensors on channel <ch> to start sample temperature
-				ret = DS2482_channel_select(ch);
+				DS2482_channel_select(ch);
+				ret = ds1820_sample_temperature(NULL, true);
 				if(!ret)
 					PRINTF("%s: ds1820_sample_temperature ret = %d\n",
 									__FUNCTION__, ret);

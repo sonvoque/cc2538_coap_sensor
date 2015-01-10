@@ -35,6 +35,8 @@ ifeq ($(WITH_BUTTON_SENSOR),1)
 CFLAGS += -DWITH_BUTTON_SENSOR=1
 endif
 
+PROJECT_SOURCEFILES += nvm-config.c
+
 VERSION_STRING := $(shell git rev-parse --verify --short HEAD)
 CFLAGS += -DVERSION_STRING=\"cc2538_coap_sensor-${VERSION_STRING}\"
 

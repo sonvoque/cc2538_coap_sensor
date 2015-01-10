@@ -43,6 +43,8 @@
 #include "net/rpl/rpl.h"
 #include "lpm.h"
 
+#include "nvm-config.h"
+
 #if PLATFORM_HAS_BUTTON
 #include "dev/button-sensor.h"
 #endif
@@ -57,25 +59,6 @@
 #include "er-coap-engine.h"
 
 #define LEDS_PERIODIC	LEDS_YELLOW
-
-#define DEBUG 1
-#if DEBUG
-#include <stdio.h>
-#define PRINTF(...) printf(__VA_ARGS__)
-#define PRINT6ADDR(addr) PRINTF("[%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x]", ((uint8_t *)addr)[0], ((uint8_t *)addr)[1], ((uint8_t *)addr)[2], ((uint8_t *)addr)[3], ((uint8_t *)addr)[4], ((uint8_t *)addr)[5], ((uint8_t *)addr)[6], ((uint8_t *)addr)[7], ((uint8_t *)addr)[8], ((uint8_t *)addr)[9], ((uint8_t *)addr)[10], ((uint8_t *)addr)[11], ((uint8_t *)addr)[12], ((uint8_t *)addr)[13], ((uint8_t *)addr)[14], ((uint8_t *)addr)[15])
-#define PRINTLLADDR(lladdr) PRINTF("[%02x:%02x:%02x:%02x:%02x:%02x]",(lladdr)->addr[0], (lladdr)->addr[1], (lladdr)->addr[2], (lladdr)->addr[3],(lladdr)->addr[4], (lladdr)->addr[5])
-#else
-#define PRINTF(...)
-#define PRINT6ADDR(addr)
-#define PRINTLLADDR(addr)
-#endif
-
-/* default POST location path to post to */
-#define DEFAULT_SINK_PATH "/sink"
-
-/* how long to wait between posts */
-#define DEFAULT_POST_INTERVAL 60
-
 #define REMOTE_PORT     UIP_HTONS(COAP_DEFAULT_PORT)
 
 extern void rplinfo_activate_resources(void);
@@ -94,51 +77,6 @@ char buf[256];
 static struct etimer et_read_sensors;
 static radio_value_t radio_value;
 static process_event_t ev_new_interval;
-
-/* flash config */
-/* MAX len for paths and hostnames */
-#define SINK_MAXLEN 31
-
-#define SENSOR_CONFIG_PAGE 0x1D000 /* nvm page where conf will be stored */
-#define SENSOR_CONFIG_VERSION 1
-#define SENSOR_CONFIG_MAGIC 0x5448
-
-/* sensor config */
-typedef struct {
-  uint16_t magic;			/* sensor magic number 0x5448 */
-  uint16_t version;			/* sensor config version number */
-  char sink_path[SINK_MAXLEN + 1];	/* path to post to */
-  uint16_t post_interval;		/* how long to wait between posts */
-  uip_ipaddr_t sink_addr;		/* sink's ip address */
-} SENSORConfig;
-
-static SENSORConfig sensor_cfg;
-
-void
-sensor_config_set_default(SENSORConfig *c)
-{
-  int i;
-  c->magic = SENSOR_CONFIG_MAGIC;
-  c->version = SENSOR_CONFIG_VERSION;
-  strncpy(c->sink_path, DEFAULT_SINK_PATH, SINK_MAXLEN);
-  c->post_interval = DEFAULT_POST_INTERVAL;
-  /* sink's default ip address */
-  c->sink_addr.u16[0] = UIP_HTONS(0xbbbb);
-  for(i=1;i<7;i++)
-	  c->sink_addr.u16[i] = 0;
-  c->sink_addr.u16[7] = UIP_HTONS(0x0001);
-}
-
-void sensor_config_print(void) {
-	PRINTF("sensor config:\n");
-	PRINTF("  magic:    %04x\n", sensor_cfg.magic);
-	PRINTF("  version:  %d\n",   sensor_cfg.version);
-	PRINTF("  sink path: %s\n",  sensor_cfg.sink_path);
-	PRINTF("  interval: %d\n",   sensor_cfg.post_interval);
-	PRINTF("  ip addr: ");
-	PRINT6ADDR(&sensor_cfg.sink_addr);
-	PRINTF("\n");
-}
 
 int
 ipaddr_sprint(char *s, const uip_ipaddr_t *addr)
@@ -287,7 +225,7 @@ config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t pre
 
     /* TODO: */
     /* flash_config_save(&flash_config); */
-    sensor_config_print();
+    //sensor_config_print();
 
     /* do clean-up actions */
     if (strncmp(pstr, "interval", len) == 0) {
@@ -482,8 +420,8 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	GPIO_SET_OUTPUT(GPIO_D_BASE, 0x30);
 	GPIO_WRITE_PIN(GPIO_D_BASE, 0x30, 0);
 #endif
-	sensor_config_set_default(&sensor_cfg);
-	sensor_config_print();
+
+	load_nvm_config();
 
 	etimer_set(&et_read_sensors, 5 * CLOCK_SECOND);
 

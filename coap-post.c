@@ -40,9 +40,9 @@
 #include "dev/adc.h"
 #include "dev/leds.h"
 #include "dev/cc2538-sensors.h"
+#include "dev/cc2538-rf.h"
 #include "net/rpl/rpl.h"
 #include "lpm.h"
-
 #include "nvm-config.h"
 
 #if PLATFORM_HAS_BUTTON
@@ -171,6 +171,8 @@ config_get_handler(void *request, void *response, uint8_t *buffer, uint16_t pref
   if ((len = REST.get_query_variable(request, "param", &pstr))) {
     if (strncmp(pstr, "interval", len) == 0) {
       n = sprintf((char *)buffer, "%d", sensor_cfg.post_interval);
+    } else if (strncmp(pstr, "channel", len) == 0) {
+      n = sprintf((char *)buffer, "%d", sensor_cfg.channel);
     } else if(strncmp(pstr, "path", len) == 0) {
       strncpy((char *)buffer, sensor_cfg.sink_path, SINK_MAXLEN);
       n = strlen(sensor_cfg.sink_path);
@@ -204,6 +206,8 @@ config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t pre
       param = &sensor_cfg.post_interval;
     } else if(strncmp(pstr, "path", len) == 0) {
       param = sensor_cfg.sink_path;
+    } else if(strncmp(pstr, "channel", len) == 0) {
+      param = &sensor_cfg.channel;
     } else if(strncmp(pstr, "ip", len) == 0) {
       new_addr = &sensor_cfg.sink_addr;
     } else {
@@ -219,13 +223,22 @@ config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t pre
     } else if(strncmp(pstr, "ip", len) == 0) {
       uiplib_ipaddrconv((const char *)new, new_addr);
       PRINT6ADDR(new_addr);
-    }  else {
+    } else if(strncmp(pstr, "channel", len) == 0) {
+      if((((uint8_t)atoi((const char *)new) >= CC2538_RF_CHANNEL_MIN) &&
+           (uint8_t)atoi((const char *)new) <= CC2538_RF_CHANNEL_MAX)) {
+        *(uint8_t *)param = (uint8_t)atoi((const char *)new);
+      } else {
+	PRINTF("Channel post [%d] not in range [%d - %d]\n",
+			(uint8_t)atoi((const char *)new),
+			CC2538_RF_CHANNEL_MIN,
+			CC2538_RF_CHANNEL_MAX);
+      }
+    } else {
       *(uint16_t *)param = (uint16_t)atoi((const char *)new);
     }
 
-    /* TODO: */
-    /* flash_config_save(&flash_config); */
-    //sensor_config_print();
+    sensor_cfg_write();
+    sensor_config_print();
 
     /* do clean-up actions */
     if (strncmp(pstr, "interval", len) == 0) {
@@ -236,16 +249,15 @@ config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t pre
 		(strncmp(pstr, "ip", len) == 0) ) {
       process_start(&read_sensors, NULL);
     } else if(strncmp(pstr, "channel", len) == 0) {
-      /* TODO: save new channel to structure, then make restart of device,
-       * and don't forget to use value from this structure to set channel on start
-       */
-      /*
-      set_channel(flash_config.channel);
-      flash_config_save(&flash_config);
-      */
-      /* stuck here and wait for WDT restarts us. Any better options for this ? */
-      while (1) { continue; }
-      ;
+      if(((uint8_t)atoi((const char *)new) >= CC2538_RF_CHANNEL_MIN) &&
+          (uint8_t)atoi((const char *)new) <= CC2538_RF_CHANNEL_MAX) {
+        NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, sensor_cfg.channel);
+        sensor_cfg_write();
+        PRINTF("Wait for WDT to restart us with new channel %d\n", sensor_cfg.channel);
+        /* stuck here and wait for WDT restarts us. Any better options for this ? */
+        while (1) { continue; }
+          ;
+      }
     }
 
   return;
@@ -422,6 +434,7 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 #endif
 
 	load_nvm_config();
+	NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, sensor_cfg.channel);
 
 	etimer_set(&et_read_sensors, 5 * CLOCK_SECOND);
 

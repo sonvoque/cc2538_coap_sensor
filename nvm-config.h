@@ -37,6 +37,8 @@
 /* how long to wait between posts */
 #define DEFAULT_POST_INTERVAL 10
 
+#define NVM_DEFAULT_CHANNEL 26
+
 #define NVM_CONFIG_SIZE 2048
 #define NVM_CONFIG_ADDRESS (0x00280000 - (2*NVM_CONFIG_SIZE))
 
@@ -49,11 +51,14 @@ typedef struct {
   char version[VERSION_MAXLEN + 1];	/* sensor config version number */
   char sink_path[SINK_MAXLEN + 1];	/* path to post to */
   uint16_t post_interval;		/* how long to wait between posts */
+  uint8_t channel;
   uip_ipaddr_t sink_addr;		/* sink's ip address */
 } SENSORConfig_t;
 
 extern SENSORConfig_t sensor_cfg;
 
 void load_nvm_config(void);
+void sensor_cfg_write(void);
+void sensor_config_print(void);
 
 #endif //__NVM_CONFIG_H__

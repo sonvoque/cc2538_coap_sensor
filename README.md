@@ -39,6 +39,10 @@ You can change some of parameters with CoAP capable client:
 * Copper (Cu) plugin for Firefox
 * SMCP C stack from command line ( https://github.com/darconeous/smcp.git )
 
+Get Temperature
+
+    $ smcpctl get coap://[IPv6 addr of sensor]/temp
+
 Get current value of some parameter:
 
     $ smcpctl get coap://[IPv6 addr of sensor]/config?param=interval

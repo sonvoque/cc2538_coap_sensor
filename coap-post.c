@@ -71,7 +71,7 @@
 #define DEFAULT_SINK_PATH "/sink"
 
 /* how long to wait between posts */
-#define DEFAULT_POST_INTERVAL 10
+#define DEFAULT_POST_INTERVAL 60
 
 #define REMOTE_PORT     UIP_HTONS(COAP_DEFAULT_PORT)
 
@@ -162,6 +162,47 @@ ipaddr_sprint(char *s, const uip_ipaddr_t *addr)
   }
   return n;
 }
+
+#if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
+static void res_get_handler(void *request, void *response, uint8_t *buffer, uint16_t preferred_size, int32_t *offset);
+
+RESOURCE(res_temp,
+         "title=\"Temperature\";rt=\"Temperature\"",
+         res_get_handler,
+         NULL,
+         NULL,
+         NULL);
+
+static void
+res_get_handler(void *request, void *response, uint8_t *buffer, uint16_t preferred_size, int32_t *offset)
+{
+  unsigned int accept = -1;
+  int16_t temperature = se95_sensor.value(0);
+
+  if(temperature & (1<<12))
+    temperature = (~temperature + 1) * 0.03125 * 1000 * -1;
+  else
+    temperature *= 0.03125 * 1000;
+
+  REST.get_header_accept(request, &accept);
+
+  if(accept == -1 || accept == REST.type.TEXT_PLAIN) {
+    REST.set_header_content_type(response, REST.type.TEXT_PLAIN);
+    snprintf((char *)buffer, REST_MAX_CHUNK_SIZE, "%d", (uint16_t)temperature);
+
+    REST.set_response_payload(response, (uint8_t *)buffer, strlen((char *)buffer));
+  } else if(accept == REST.type.APPLICATION_JSON) {
+    REST.set_header_content_type(response, REST.type.APPLICATION_JSON);
+    snprintf((char *)buffer, REST_MAX_CHUNK_SIZE, "{'temp':%d}", (uint16_t)temperature);
+
+    REST.set_response_payload(response, buffer, strlen((char *)buffer));
+  } else {
+    REST.set_response_status(response, REST.status.NOT_ACCEPTABLE);
+    const char *msg = "Supporting content-types text/plain and application/json";
+    REST.set_response_payload(response, msg, strlen(msg));
+  }
+}
+#endif
 
 static void config_get_handler(void *request, void *response, uint8_t *buffer, uint16_t preferred_size, int32_t *offset);
 static void config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t preferred_size, int32_t *offset);
@@ -419,6 +460,7 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 
 #if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
 	SENSORS_ACTIVATE(se95_sensor);
+	rest_activate_resource(&res_temp, "temp");
 #endif
 #if WITH_SE95_SENSOR
 	PRINTF("TMP102 Sensor\n");

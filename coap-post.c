@@ -477,10 +477,11 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	PRINTF("Button Sensor\n");
 #endif
 
+#if WITH_MMS_BOARD
 	/* off dual led on PD4 & PD5 */
 	GPIO_SET_OUTPUT(GPIO_D_BASE, 0x30);
 	GPIO_WRITE_PIN(GPIO_D_BASE, 0x30, 0);
-
+#endif
 	sensor_config_set_default(&sensor_cfg);
 	sensor_config_print();
 

@@ -21,6 +21,11 @@ SMALL=1
 APPS += er-coap
 APPS += rest-engine
 
+PROJECTDIRS += rplinfo
+PROJECT_SOURCEFILES += rplinfo.c
+
+PROJECTDIRS += dev
+
 ifeq ($(WITH_SE95_SENSOR),1)
 CFLAGS += -DWITH_SE95_SENSOR=1
 endif
@@ -34,7 +39,5 @@ ifeq ($(WITH_BUTTON_SENSOR),1)
 CFLAGS += -DWITH_BUTTON_SENSOR=1
 endif
 
-PROJECTDIRS += rplinfo
-PROJECT_SOURCEFILES += rplinfo.c
 
 include $(CONTIKI)/Makefile.include

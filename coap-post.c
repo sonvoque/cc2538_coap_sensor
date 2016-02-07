@@ -37,16 +37,19 @@
 #include "contiki-net.h"
 #include "net/rpl/rpl.h"
 #include "dev/radio.h"
+#include "dev/adc.h"
+#include "dev/leds.h"
+#include "dev/cc2538-sensors.h"
+#include "net/rpl/rpl.h"
+#include "lpm.h"
 
 #if PLATFORM_HAS_BUTTON
 #include "dev/button-sensor.h"
 #endif
-
-#include "net/rpl/rpl.h"
-#include "dev/adc-sensor.h"
-#include "dev/leds.h"
-#include "lpm.h"
-#if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
+#if WITH_TMP102_SENSOR
+#include "dev/tmp102-sensor.h"
+#endif
+#if WITH_SE95_SENSOR
 #include "dev/se95-sensor.h"
 #endif
 
@@ -177,7 +180,11 @@ static void
 res_get_handler(void *request, void *response, uint8_t *buffer, uint16_t preferred_size, int32_t *offset)
 {
   unsigned int accept = -1;
+#if WITH_SE95_SENSOR
   int16_t temperature = se95_sensor.value(0);
+#else
+  int16_t temperature = tmp102_sensor.value(0);
+#endif
 
   if(temperature & (1<<12))
     temperature = (~temperature + 1) * 0.03125 * 1000 * -1;
@@ -390,7 +397,7 @@ PROCESS_THREAD(read_sensors, ev, data)
 	uint8_t m = 0;
 	char temp_buf[30];
 #endif
-	int16_t value;
+	int value;
 	linkaddr_t *addr;
 
 	PROCESS_BEGIN();
@@ -406,11 +413,11 @@ PROCESS_THREAD(read_sensors, ev, data)
 		     addr->u8[6],
 		     addr->u8[7]);
 
-	value = adc_sensor.value(ADC_SENSOR_VDD_3);
-	n += sprintf(&(buf[n]),",\"vdd\":\"%d mV\"", value * (3 * 1190) / (2047 << 4));
-	value = adc_sensor.value(ADC_SENSOR_TEMP);
-	n += sprintf(&(buf[n]),",\"temp\":\"%d mC\"", 25000 + ((value >> 4) - 1422) * 10000 / 42);
-	n += sprintf(&(buf[n]),",\"count\":\"%d\"", uptime_count);
+	value = vdd3_sensor.value(CC2538_SENSORS_VALUE_TYPE_CONVERTED);
+	n += sprintf(&(buf[n]),",\"vdd\":%04d", value);
+	value = cc2538_temp_sensor.value(CC2538_SENSORS_VALUE_TYPE_CONVERTED);
+	n += sprintf(&(buf[n]),",\"temp\":%05d", value);
+	n += sprintf(&(buf[n]),",\"c\":\"%d\"", uptime_count);
 #if WITH_SE95_SENSOR
 	value = se95_sensor.value(0);
 	if(value & (1<<12))
@@ -422,16 +429,11 @@ PROCESS_THREAD(read_sensors, ev, data)
 	n += m;
 #endif
 #if WITH_TMP102_SENSOR
-	value = se95_sensor.value(0);
-	if(value & (1<<12))
-		value = (~value + 1) * 0.03125 * 1000 * -1;
-	else
-		value *= 0.03125 * 1000;
-	m = sprintf(temp_buf, ",\"tmp102\":\"%d mC\"", value);
+	value = tmp102_sensor.value(TMP102_VALUE_X1000);
+	m = sprintf(temp_buf, ",\"tmp102\":%05d", value);
 	strncat(&(buf[n]), temp_buf, m);
 	n += m;
 #endif
-
 	if(NETSTACK_RADIO.get_value(RADIO_PARAM_RSSI, &radio_value) == RADIO_RESULT_OK)
 		n += sprintf(&(buf[n]),",\"rssi\":\"%d dBm\"", radio_value);
 
@@ -448,7 +450,6 @@ PROCESS_THREAD(read_sensors, ev, data)
 
 PROCESS_THREAD(cc2538_sensor, ev, data)
 {
-
 	PROCESS_BEGIN();
 
 	ev_new_interval = process_alloc_event();
@@ -459,14 +460,17 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	rplinfo_activate_resources();
 
 #if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
-	SENSORS_ACTIVATE(se95_sensor);
 	rest_activate_resource(&res_temp, "temp");
 #endif
-#if WITH_SE95_SENSOR
-	PRINTF("TMP102 Sensor\n");
-#endif
 #if WITH_TMP102_SENSOR
+	PRINTF("TMP102 Sensor\n");
+	SENSORS_ACTIVATE(tmp102_sensor);
+	tmp102_sensor.configure(TMP102_CONF_MODE, TMP102_EXTENDED_MODE);
+	tmp102_sensor.configure(TMP102_CONF_CONV_RATE, TMP102_CONV_RATE_4HZ);
+#endif
+#if WITH_SE95_SENSOR
 	PRINTF("SE95 Sensor\n");
+	SENSORS_ACTIVATE(se95_sensor);
 #endif
 #if WITH_BUTTON_SENSOR
 	SENSORS_ACTIVATE(button_sensor);

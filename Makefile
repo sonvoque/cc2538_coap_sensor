@@ -8,14 +8,6 @@ WITH_BUTTON_SENSOR=1
 CONTIKI= contiki
 CFLAGS += -DPROJECT_CONF_H=\"project-conf.h\"
 
-# Contiki IPv6 configuration
-WITH_UIP6=1
-UIP_CONF_IPV6=1
-# IPv6 make config disappeared completely
-CFLAGS += -DUIP_CONF_IPV6=1
-# variable for Makefile.include
-CFLAGS += -DUIP_CONF_IPV6_RPL=1
-
 SMALL=1
 
 # REST Engine shall use Erbium CoAP implementation

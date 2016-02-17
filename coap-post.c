@@ -175,6 +175,9 @@ config_get_handler(void *request, void *response, uint8_t *buffer, uint16_t pref
     } else if(strncmp(pstr, "path", len) == 0) {
       strncpy((char *)buffer, sensor_cfg.sink_path, SINK_MAXLEN);
       n = strlen(sensor_cfg.sink_path);
+    } else if(strncmp(pstr, "version", len) == 0) {
+      strncpy((char *)buffer, sensor_cfg.version, VERSION_MAXLEN);
+      n = strlen(sensor_cfg.version);
     } else if(strncmp(pstr, "ip", len) == 0) {
       n = ipaddr_sprint((char *)buffer, &sensor_cfg.sink_addr);
     } else {

@@ -457,7 +457,6 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	/* Initialize the REST engine. */
 	rest_init_engine();
 	rest_activate_resource(&config, "config");
-	rplinfo_activate_resources();
 
 #if WITH_SE95_SENSOR || WITH_TMP102_SENSOR
 	rest_activate_resource(&res_temp, "temp");

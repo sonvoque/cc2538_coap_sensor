@@ -15,9 +15,6 @@ SMALL=1
 APPS += er-coap
 APPS += rest-engine
 
-PROJECTDIRS += rplinfo
-PROJECT_SOURCEFILES += rplinfo.c
-
 PROJECTDIRS += dev
 
 ifeq ($(WITH_MMS_BOARD),1)

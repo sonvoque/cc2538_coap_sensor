@@ -180,16 +180,19 @@ static void
 res_get_handler(void *request, void *response, uint8_t *buffer, uint16_t preferred_size, int32_t *offset)
 {
   unsigned int accept = -1;
-#if WITH_SE95_SENSOR
-  int16_t temperature = se95_sensor.value(0);
-#else
-  int16_t temperature = tmp102_sensor.value(0);
-#endif
+  int temperature;
 
+#if WITH_SE95_SENSOR
+  temperature = se95_sensor.value(0);
   if(temperature & (1<<12))
     temperature = (~temperature + 1) * 0.03125 * 1000 * -1;
   else
     temperature *= 0.03125 * 1000;
+#elif WITH_TMP102_SENSOR
+  temperature = tmp102_sensor.value(TMP102_VALUE_X1000);
+#else
+  temperature = 0;
+#endif
 
   REST.get_header_accept(request, &accept);
 

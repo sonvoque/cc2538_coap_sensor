@@ -37,6 +37,8 @@
 #undef NETSTACK_CONF_RDC
 #define NETSTACK_CONF_RDC	contikimac_driver
 
+#define REST_MAX_CHUNK_SIZE     128
+
 #undef CC2538_RF_CONF_CHANNEL
 #define CC2538_RF_CONF_CHANNEL	26
 

@@ -52,7 +52,10 @@
 #if WITH_SE95_SENSOR
 #include "dev/se95-sensor.h"
 #endif
+#if WITH_OW_TEMP_SENSORS
+#include "dev/ds2482.h"
 #include "dev/ds1820.h"
+#endif
 
 #include "rest-engine.h"
 #include "er-coap-engine.h"
@@ -497,8 +500,6 @@ PROCESS_THREAD(read_sensors, ev, data)
 
 	if(NETSTACK_RADIO.get_value(RADIO_PARAM_RSSI, &radio_value) == RADIO_RESULT_OK)
 		n += sprintf(&(buf[n]),",\"rssi\":\"%d dBm\"", radio_value);
-
-	n += sprintf(&(buf[n]),",\"count\":\"%d\"", uptime_count);
 
 	n += sprintf(&(buf[n]),"}");
 	buf[n] = 0;

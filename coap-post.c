@@ -457,8 +457,8 @@ PROCESS_THREAD(read_sensors, ev, data)
 		PRINTF("\n");
 */
 
-		if(s->rom_addr[0] != DS18S20_FAMMILY_CODE ||
-		   s->rom_addr[0] != DS18S20_FAMMILY_CODE) {
+		if(s->rom_addr[0] != DS18S20_FAMMILY_CODE &&
+		   s->rom_addr[0] != DS18B20_FAMMILY_CODE) {
 			PRINTF("Skip, not temperature sensor\n");
 			continue;
 		}
@@ -792,8 +792,8 @@ PROCESS_THREAD(ow_read_temp, ev, data)
 
 		PRINTF(" [%d:%d] ", s->channel, s->idx);
 
-		if(s->rom_addr[0] != DS18S20_FAMMILY_CODE ||
-		   s->rom_addr[0] != DS18S20_FAMMILY_CODE) {
+		if(s->rom_addr[0] != DS18S20_FAMMILY_CODE &&
+		   s->rom_addr[0] != DS18B20_FAMMILY_CODE) {
 			PRINTF("Skip, not temperature sensor\n");
 			continue;
 		}

@@ -38,6 +38,8 @@ PROJECT_SOURCEFILES += ds2482.c
 PROJECT_SOURCEFILES += ds1820.c
 endif
 
+PROJECT_SOURCEFILES += nvm-config.c
+
 VERSION_STRING := $(shell git rev-parse --verify --short HEAD)
 CFLAGS += -DVERSION_STRING=\"cc2538_coap_sensor-${VERSION_STRING}\"
 

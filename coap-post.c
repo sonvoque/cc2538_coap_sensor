@@ -37,10 +37,14 @@
 #include "contiki-net.h"
 #include "net/rpl/rpl.h"
 #include "dev/radio.h"
-#include "dev/adc.h"
-#include "dev/leds.h"
-#include "dev/cc2538-sensors.h"
+#include "dev/cc2538-rf.h"
+#include "dev/sys-ctrl.h"
+
+#include "nvm-config.h"
+
 #include "net/rpl/rpl.h"
+#include "dev/cc2538-sensors.h"
+#include "dev/leds.h"
 #include "lpm.h"
 
 #if PLATFORM_HAS_BUTTON
@@ -62,30 +66,14 @@
 
 #define LEDS_PERIODIC	LEDS_YELLOW
 
-#define DEBUG 1
-#if DEBUG
-#include <stdio.h>
-#define PRINTF(...) printf(__VA_ARGS__)
-#define PRINT6ADDR(addr) PRINTF("[%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x]", ((uint8_t *)addr)[0], ((uint8_t *)addr)[1], ((uint8_t *)addr)[2], ((uint8_t *)addr)[3], ((uint8_t *)addr)[4], ((uint8_t *)addr)[5], ((uint8_t *)addr)[6], ((uint8_t *)addr)[7], ((uint8_t *)addr)[8], ((uint8_t *)addr)[9], ((uint8_t *)addr)[10], ((uint8_t *)addr)[11], ((uint8_t *)addr)[12], ((uint8_t *)addr)[13], ((uint8_t *)addr)[14], ((uint8_t *)addr)[15])
-#define PRINTLLADDR(lladdr) PRINTF("[%02x:%02x:%02x:%02x:%02x:%02x]",(lladdr)->addr[0], (lladdr)->addr[1], (lladdr)->addr[2], (lladdr)->addr[3],(lladdr)->addr[4], (lladdr)->addr[5])
-#else
-#define PRINTF(...)
-#define PRINT6ADDR(addr)
-#define PRINTLLADDR(addr)
-#endif
-
-/* default POST location path to post to */
-#define DEFAULT_SINK_PATH "/sink"
-
-/* how long to wait between posts */
-#define DEFAULT_POST_INTERVAL 60
-
 #define REMOTE_PORT     UIP_HTONS(COAP_DEFAULT_PORT)
 
+#if WITH_OW_TEMP_SENSORS
 #define MAX_SENSORS 10
 MEMB(sensor_memb, struct ow_sensor_s, MAX_SENSORS);
 LIST(sensor_list);
 ow_sensor_t *s;
+#endif
 
 
 extern void rplinfo_activate_resources(void);
@@ -113,51 +101,6 @@ static int ow_sensors_found = 0;
 #endif
 static radio_value_t radio_value;
 static process_event_t ev_new_interval;
-
-/* flash config */
-/* MAX len for paths and hostnames */
-#define SINK_MAXLEN 31
-
-#define SENSOR_CONFIG_PAGE 0x1D000 /* nvm page where conf will be stored */
-#define SENSOR_CONFIG_VERSION 1
-#define SENSOR_CONFIG_MAGIC 0x5448
-
-/* sensor config */
-typedef struct {
-  uint16_t magic;			/* sensor magic number 0x5448 */
-  uint16_t version;			/* sensor config version number */
-  char sink_path[SINK_MAXLEN + 1];	/* path to post to */
-  uint16_t post_interval;		/* how long to wait between posts */
-  uip_ipaddr_t sink_addr;		/* sink's ip address */
-} SENSORConfig;
-
-static SENSORConfig sensor_cfg;
-
-void
-sensor_config_set_default(SENSORConfig *c)
-{
-  int i;
-  c->magic = SENSOR_CONFIG_MAGIC;
-  c->version = SENSOR_CONFIG_VERSION;
-  strncpy(c->sink_path, DEFAULT_SINK_PATH, SINK_MAXLEN);
-  c->post_interval = DEFAULT_POST_INTERVAL;
-  /* sink's default ip address */
-  c->sink_addr.u16[0] = UIP_HTONS(0xbbbb);
-  for(i=1;i<7;i++)
-	  c->sink_addr.u16[i] = 0;
-  c->sink_addr.u16[7] = UIP_HTONS(0x0001);
-}
-
-void sensor_config_print(void) {
-	PRINTF("sensor config:\n");
-	PRINTF("  magic:    %04x\n", sensor_cfg.magic);
-	PRINTF("  version:  %d\n",   sensor_cfg.version);
-	PRINTF("  sink path: %s\n",  sensor_cfg.sink_path);
-	PRINTF("  interval: %d\n",   sensor_cfg.post_interval);
-	PRINTF("  ip addr: ");
-	PRINT6ADDR(&sensor_cfg.sink_addr);
-	PRINTF("\n");
-}
 
 int
 ipaddr_sprint(char *s, const uip_ipaddr_t *addr)
@@ -255,9 +198,19 @@ config_get_handler(void *request, void *response, uint8_t *buffer, uint16_t pref
   if ((len = REST.get_query_variable(request, "param", &pstr))) {
     if (strncmp(pstr, "interval", len) == 0) {
       n = sprintf((char *)buffer, "%d", sensor_cfg.post_interval);
+    } else if (strncmp(pstr, "timestamp", len) == 0) {
+      n = sprintf((char *)buffer, "%lu", clock_seconds());
+    } else if (strncmp(pstr, "channel", len) == 0) {
+      n = sprintf((char *)buffer, "%d", sensor_cfg.channel);
     } else if(strncmp(pstr, "path", len) == 0) {
       strncpy((char *)buffer, sensor_cfg.sink_path, SINK_MAXLEN);
       n = strlen(sensor_cfg.sink_path);
+    } else if(strncmp(pstr, "version", len) == 0) {
+      strncpy((char *)buffer, sensor_cfg.version, VERSION_MAXLEN);
+      n = strlen(sensor_cfg.version);
+    } else if(strncmp(pstr, "label", len) == 0) {
+      strncpy((char *)buffer, sensor_cfg.label, LABEL_MAXLEN);
+      n = strlen(sensor_cfg.version);
     } else if(strncmp(pstr, "ip", len) == 0) {
       n = ipaddr_sprint((char *)buffer, &sensor_cfg.sink_addr);
     } else {
@@ -282,12 +235,19 @@ config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t pre
   const char *pstr;
   size_t len = 0;
   const uint8_t *new;
+  static uint32_t timestamp;
 
   if ((len = REST.get_query_variable(request, "param", &pstr))) {
     if (strncmp(pstr, "interval", len) == 0) {
       param = &sensor_cfg.post_interval;
+    } else if (strncmp(pstr, "timestamp", len) == 0) {
+      timestamp = clock_seconds();
     } else if(strncmp(pstr, "path", len) == 0) {
       param = sensor_cfg.sink_path;
+    } else if(strncmp(pstr, "label", len) == 0) {
+      param = sensor_cfg.label;
+    } else if(strncmp(pstr, "channel", len) == 0) {
+      param = &sensor_cfg.channel;
     } else if(strncmp(pstr, "ip", len) == 0) {
       new_addr = &sensor_cfg.sink_addr;
     } else {
@@ -300,15 +260,31 @@ config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t pre
     REST.get_request_payload(request, &new);
     if ( (strncmp(pstr, "path", len) == 0) ) {
       strncpy(param, (const char *)new, SINK_MAXLEN);
+	} else if(strncmp(pstr, "label", len) == 0) {
+      strncpy(param, (const char *)new, LABEL_MAXLEN);
     } else if(strncmp(pstr, "ip", len) == 0) {
       uiplib_ipaddrconv((const char *)new, new_addr);
       PRINT6ADDR(new_addr);
+    } else if(strncmp(pstr, "timestamp", len) == 0) {
+      timestamp = (uint32_t)atoi((const char *)new);
+      PRINTF("New timestamp is %lu\n", timestamp);
+      clock_set_seconds(timestamp);
+      return;
+    } else if(strncmp(pstr, "channel", len) == 0) {
+      if((((uint8_t)atoi((const char *)new) >= CC2538_RF_CHANNEL_MIN) &&
+           (uint8_t)atoi((const char *)new) <= CC2538_RF_CHANNEL_MAX)) {
+        *(uint8_t *)param = (uint8_t)atoi((const char *)new);
+      } else {
+	PRINTF("Channel post [%d] not in range [%d - %d]\n",
+			(uint8_t)atoi((const char *)new),
+			CC2538_RF_CHANNEL_MIN,
+			CC2538_RF_CHANNEL_MAX);
+      }
     }  else {
       *(uint16_t *)param = (uint16_t)atoi((const char *)new);
     }
 
-    /* TODO: */
-    /* flash_config_save(&flash_config); */
+    sensor_cfg_write();
     sensor_config_print();
 
     /* do clean-up actions */
@@ -317,19 +293,21 @@ config_post_handler(void *request, void *response, uint8_t *buffer, uint16_t pre
       process_post(&cc2538_sensor, ev_new_interval, NULL);
     } else if ( (strncmp(pstr, "netloc", len) == 0) ||
 		(strncmp(pstr, "path", len) == 0)  ||
+		(strncmp(pstr, "label", len) == 0)  ||
 		(strncmp(pstr, "ip", len) == 0) ) {
       process_start(&read_sensors, NULL);
-    } else if(strncmp(pstr, "channel", len) == 0) {
-      /* TODO: save new channel to structure, then make restart of device,
-       * and don't forget to use value from this structure to set channel on start
-       */
-      /*
-      set_channel(flash_config.channel);
-      flash_config_save(&flash_config);
-      */
-      /* stuck here and wait for WDT restarts us. Any better options for this ? */
-      while (1) { continue; }
-      ;
+    } else if (strncmp(pstr, "channel", len) == 0) {
+		if (((uint8_t)atoi((const char *)new) >= CC2538_RF_CHANNEL_MIN) &&
+			(uint8_t)atoi((const char *)new) <= CC2538_RF_CHANNEL_MAX) {
+			NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, sensor_cfg.channel);
+			sensor_cfg_write();
+			PRINTF("Wait for WDT to restart us with new channel %d\n",
+						sensor_cfg.channel);
+			/* Stuck here and wait for WDT restarts us.
+			   Any better options for this ? */
+			while (1) { continue; }
+				;
+		}
     }
 
   return;
@@ -403,6 +381,7 @@ PROCESS_THREAD(button_post, ev, data)
 	buf[n] = 0;
 	PRINTF("buf: %s\n", buf);
 
+#ifdef WITH_OW_TEMP_SENSORS
 	if(ow_sensors_found) {
 		PRINTF("%s: release memory for OW temp sensors\n", __FUNCTION__);
 		while(list_head(sensor_list)) {
@@ -411,6 +390,7 @@ PROCESS_THREAD(button_post, ev, data)
 			memb_free(&sensor_memb, s);
 		}
 	}
+#endif
 
 	if (dag != NULL) {
 		process_start(&do_post, NULL);
@@ -516,6 +496,9 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 {
 	PROCESS_BEGIN();
 
+	PRINTF("\"%s\" ver. \"%s\" started\n",
+			PROCESS_NAME_STRING(&cc2538_sensor), SENSOR_CONFIG_VERSION);
+
 	ev_new_interval = process_alloc_event();
 
 	/* Initialize the REST engine. */
@@ -545,8 +528,9 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	GPIO_SET_OUTPUT(GPIO_D_BASE, 0x30);
 	GPIO_WRITE_PIN(GPIO_D_BASE, 0x30, 0);
 #endif
-	sensor_config_set_default(&sensor_cfg);
-	sensor_config_print();
+
+	load_nvm_config();
+	NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, sensor_cfg.channel);
 
 	etimer_set(&et_read_sensors, 5 * CLOCK_SECOND);
 
@@ -554,8 +538,10 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 	post_count = 0;
 	uptime_count = 0;
 
+#if WITH_OW_TEMP_SENSORS
 	list_init(sensor_list);
 	memb_init(&sensor_memb);
+#endif
 
 	while(1) {
 		PROCESS_WAIT_EVENT();
@@ -597,12 +583,14 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 
 	}
 
+#if WITH_OW_TEMP_SENSORS
 	// If thread exits, remove all sensors and release memory
 	while(list_head(sensor_list)) {
 		// remove last element from list
 		s = list_chop(sensor_list);
 		memb_free(&sensor_memb, s);
 	}
+#endif
 
 	PROCESS_END();
 }

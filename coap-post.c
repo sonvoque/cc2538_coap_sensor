@@ -83,6 +83,9 @@ PROCESS(cc2538_sensor, "CC2538 based sensor");
 PROCESS(ow_i2c, "1wire i2c test");
 PROCESS(ow_read_temp, "1wire read temp");
 #endif
+#if WITH_UDPCLIENT
+PROCESS_NAME(udp_client_process);
+#endif
 AUTOSTART_PROCESSES(&cc2538_sensor);
 
 /* flag to test if con has failed or not */
@@ -498,7 +501,9 @@ PROCESS_THREAD(cc2538_sensor, ev, data)
 
 	PRINTF("\"%s\" ver. \"%s\" started\n",
 			PROCESS_NAME_STRING(&cc2538_sensor), SENSOR_CONFIG_VERSION);
-
+#if WITH_UDPCLIENT
+	process_start(&udp_client_process, NULL);
+#endif
 	ev_new_interval = process_alloc_event();
 
 	/* Initialize the REST engine. */
